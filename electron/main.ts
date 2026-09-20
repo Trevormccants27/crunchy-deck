@@ -92,7 +92,9 @@ function installFileLogger() {
   }
 }
 
-// Serve the built SvelteKit SPA over localhost.
+// Serve the built SvelteKit SPA over localhost. We can't use file:// because the adapter-static
+// fallback emits absolute (/_app/...) asset URLs; an HTTP origin also gives the SPA client router
+// a real base + lets unknown routes fall back to index.html.
 const MIME: Record<string, string> = {
   '.html': 'text/html',
   '.js': 'text/javascript',
@@ -110,7 +112,11 @@ const MIME: Record<string, string> = {
   '.webmanifest': 'application/manifest+json'
 }
 
+// Fixed loopback port for the bundled SPA so the origin (and its localStorage) is stable across launches.
 const STABLE_PORT = 43547
+// The static server, kept module-level so quit can close its listening socket before process.exit —
+// an open loopback socket/FD can keep Steam's reaper thinking the process is still alive (Big Picture
+// "abort game" loop).
 let staticServer: import('node:http').Server | null = null
 
 function serveStatic(dir: string): Promise<number> {
@@ -123,7 +129,7 @@ function serveStatic(dir: string): Promise<number> {
   }
   let file = path.join(dir, pathname)
   if (!existsSync(file) || pathname === '/') file = path.join(dir, 'index.html')
-    if (!existsSync(file)) file = path.join(dir, 'index.html')
+    if (!existsSync(file)) file = path.join(dir, 'index.html') // SPA fallback for client routes
       try {
         const data = readFileSync(file)
         res.writeHead(200, { 'Content-Type': MIME[path.extname(file)] || 'application/octet-stream' })
@@ -133,7 +139,11 @@ function serveStatic(dir: string): Promise<number> {
         res.end('not found')
       }
   })
-  staticServer = server
+  staticServer = server // closed on quit (see doQuit) so the loopback socket is released before exit
+  // Listen on a STABLE port so the page origin (http://127.0.0.1:PORT) is the same every launch.
+  // localStorage / IndexedDB are scoped to the exact origin, so a random port (listen 0) silently wiped
+  // every persisted setting (e.g. the skip interval) on each restart. Fall back to a random port only if
+  // the fixed one is taken — rare, since the quit teardown frees it (settings just won't persist that run).
   return new Promise((resolve) => {
     const onUp = () => resolve((server.address() as { port: number }).port)
     server.once('error', (e: NodeJS.ErrnoException) => {
@@ -149,7 +159,7 @@ function installMediaHeaderRules() {
     {
       urls: [
         '*://*.crunchyrollcdn.com/*',
-        '*://*.gccrunchyroll.com/*',
+        '*://*.gccrunchyroll.com/*', // CR's Google-Edge-Cache CDN — some content routes here, not Akamai
         '*://*.vrv.co/*',
         '*://*.akamaized.net/*',
         '*://*.crunchyrollsvc.com/*',
@@ -160,6 +170,7 @@ function installMediaHeaderRules() {
       cb({ requestHeaders: rewriteRendererRequestHeaders(details.url, details.requestHeaders) })
     }
   )
+  // Diagnostic: log the final license profile without logging complete credentials.
   session.defaultSession.webRequest.onSendHeaders({ urls: ['*://*.crunchyrollsvc.com/*'] }, (details) => {
     if (!details.url.includes('license')) return
       const hs = Object.entries(details.requestHeaders)
@@ -180,12 +191,17 @@ function createWindow(loadUrl: string) {
     title: 'Crunchy Deck',
     backgroundColor: '#0a0a0a',
     autoHideMenuBar: true,
+    // gamescope already presents the Steam app fullscreen. Asking Electron to transition the X11 window
+    // into native fullscreen as it is being embedded can crash/restart gamescope on some Deck setups.
     fullscreen: !onGamescope,
 
     webPreferences: {
       preload: path.join(__dirname, 'preload.js'),
                                 contextIsolation: true,
                                 nodeIntegration: false,
+                                // Shaka fetches CR's DASH manifest/segments + the Widevine license cross-origin from the
+                                // renderer (all Bearer-authed); CR's media servers don't answer CORS preflights, so disable
+                                // web security. Safe here: we only ever load our own bundled SvelteKit app, never remote content.
                                 webSecurity: false
     }
   })
@@ -196,8 +212,8 @@ function createWindow(loadUrl: string) {
     }
   }
 
-  win.webContents.setUserAgent(CR.UA)
-  win.on('page-title-updated', (e) => e.preventDefault())
+  win.webContents.setUserAgent(CR.UA) // Tizen-TV UA to match the cr_smart_tv client
+  win.on('page-title-updated', (e) => e.preventDefault()) // keep the OS window titled "Crunchy Deck"
 
   // Scale UI according to resolution on page load
   win.webContents.on('did-finish-load', () => {
@@ -210,6 +226,8 @@ function createWindow(loadUrl: string) {
   win.on('resize', applyZoom)
   win.on('move', applyZoom)
 
+  // Blank-screen diagnostics: pinpoint WHERE the load dies (start -> dom-ready -> finish), surface a
+  // renderer crash / failed load / its console errors. All land in app.log.
   win.webContents.on('did-start-loading', () => boot('did-start-loading'))
   win.webContents.on('dom-ready', () => boot('dom-ready'))
   win.webContents.on('did-fail-load', (_e, code, desc, url, isMainFrame) =>
@@ -238,7 +256,7 @@ app.whenReady().then(async () => {
   })
 
   app.on('child-process-gone', (_e, d) => console.log('[child-gone]', JSON.stringify(d)))
-
+  // Diagnostics: session/compositor + GPU backend, so a blank Gaming-Mode window is debuggable from app.log.
   const e = process.env
   console.log(
     '[env]',
@@ -262,7 +280,8 @@ app.whenReady().then(async () => {
     console.log('[gpu-features]', JSON.stringify(app.getGPUFeatureStatus()))
   })
   .catch((err) => console.log('[gpu] info error', String(err)))
-
+  // CastLabs recommends waiting for Electron's component updater before creating a playback window.
+  // Continue after a rejected update (for example, offline) so a CDM update failure never hides the UI.
   try {
     await components.whenReady()
     console.log('[cdm] components ready:', components.status())
@@ -278,15 +297,20 @@ app.whenReady().then(async () => {
   boot('served')
   let win = createWindow(url)
   boot('window-created')
-  initUpdater(win)
-  app.on('activate', () => {
-    if (BrowserWindow.getAllWindows().length === 0) win = createWindow(url)
-  })
+  initUpdater(win) // self-update from GitHub Releases (packaged AppImage only)
+app.on('activate', () => {
+  if (BrowserWindow.getAllWindows().length === 0) win = createWindow(url)
+})
 }).catch((err) => {
   console.error('[boot-fatal]', err)
   app.exit(1)
 })
 
+// Every quit path funnels through doQuit. Crucially that includes SIGTERM — how Steam's "Exit game" /
+// overlay-close stops us; without this handler Electron runs its slow graceful shutdown (multi-second
+// under gamescope). Before the hard kill we CLOSE the static server: an open loopback listening socket
+// can keep Steam's reaper treating the process as still alive (Big Picture "abort game" loop), so we
+// release it first. removeAllListeners stops any stray IPC from re-triggering mid-teardown.
 function doQuit(reason: string) {
   try {
     staticServer?.close()
