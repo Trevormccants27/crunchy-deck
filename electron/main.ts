@@ -122,22 +122,22 @@ let staticServer: import('node:http').Server | null = null
 function serveStatic(dir: string): Promise<number> {
   const server = http.createServer((req, res) => {
     let pathname = '/'
-  try {
-    pathname = decodeURIComponent(new URL(req.url || '/', 'http://localhost').pathname)
-  } catch {
-    /* default */
-  }
-  let file = path.join(dir, pathname)
-  if (!existsSync(file) || pathname === '/') file = path.join(dir, 'index.html')
+    try {
+      pathname = decodeURIComponent(new URL(req.url || '/', 'http://localhost').pathname)
+    } catch {
+      /* default */
+    }
+    let file = path.join(dir, pathname)
+    if (!existsSync(file) || pathname === '/') file = path.join(dir, 'index.html')
     if (!existsSync(file)) file = path.join(dir, 'index.html') // SPA fallback for client routes
-      try {
-        const data = readFileSync(file)
-        res.writeHead(200, { 'Content-Type': MIME[path.extname(file)] || 'application/octet-stream' })
-        res.end(data)
-      } catch {
-        res.writeHead(404)
-        res.end('not found')
-      }
+    try {
+      const data = readFileSync(file)
+      res.writeHead(200, { 'Content-Type': MIME[path.extname(file)] || 'application/octet-stream' })
+      res.end(data)
+    } catch {
+      res.writeHead(404)
+      res.end('not found')
+    }
   })
   staticServer = server // closed on quit (see doQuit) so the loopback socket is released before exit
   // Listen on a STABLE port so the page origin (http://127.0.0.1:PORT) is the same every launch.
@@ -173,10 +173,10 @@ function installMediaHeaderRules() {
   // Diagnostic: log the final license profile without logging complete credentials.
   session.defaultSession.webRequest.onSendHeaders({ urls: ['*://*.crunchyrollsvc.com/*'] }, (details) => {
     if (!details.url.includes('license')) return
-      const hs = Object.entries(details.requestHeaders)
+    const hs = Object.entries(details.requestHeaders)
       .map(([k, v]) => `${k}=${String(v).slice(0, 28)}`)
       .join(' | ')
-      console.log('[lic-req]', details.method, hs)
+    console.log('[lic-req]', details.method, hs)
   })
 }
 
@@ -197,12 +197,12 @@ function createWindow(loadUrl: string) {
 
     webPreferences: {
       preload: path.join(__dirname, 'preload.js'),
-                                contextIsolation: true,
-                                nodeIntegration: false,
-                                // Shaka fetches CR's DASH manifest/segments + the Widevine license cross-origin from the
-                                // renderer (all Bearer-authed); CR's media servers don't answer CORS preflights, so disable
-                                // web security. Safe here: we only ever load our own bundled SvelteKit app, never remote content.
-                                webSecurity: false
+      contextIsolation: true,
+      nodeIntegration: false,
+      // Shaka fetches CR's DASH manifest/segments + the Widevine license cross-origin from the
+      // renderer (all Bearer-authed); CR's media servers don't answer CORS preflights, so disable
+      // web security. Safe here: we only ever load our own bundled SvelteKit app, never remote content.
+      webSecurity: false
     }
   })
 
@@ -231,12 +231,12 @@ function createWindow(loadUrl: string) {
   win.webContents.on('did-start-loading', () => boot('did-start-loading'))
   win.webContents.on('dom-ready', () => boot('dom-ready'))
   win.webContents.on('did-fail-load', (_e, code, desc, url, isMainFrame) =>
-  console.log('[did-fail-load]', code, desc, url, 'main=' + isMainFrame)
+    console.log('[did-fail-load]', code, desc, url, 'main=' + isMainFrame)
   )
   win.webContents.on('render-process-gone', (_e, d) => console.log('[render-gone]', JSON.stringify(d)))
   win.webContents.on('unresponsive', () => console.log('[unresponsive]'))
   win.webContents.on('console-message', (_e, level, message, line, sourceId) =>
-  console.log('[rconsole]', level, (sourceId || '') + ':' + line, String(message).slice(0, 280))
+    console.log('[rconsole]', level, (sourceId || '') + ':' + line, String(message).slice(0, 280))
   )
   win.loadURL(loadUrl).catch((err) => console.log('[loadURL] rejected', String(err)))
   return win
@@ -268,18 +268,18 @@ app.whenReady().then(async () => {
       wayland: e.WAYLAND_DISPLAY,
       display: e.DISPLAY,
       steam: !!(e.SteamEnv || e.SteamGameId || e.SteamAppId),
-                   ozone: app.commandLine.getSwitchValue('ozone-platform') || '(auto)',
-                   angle: app.commandLine.getSwitchValue('use-angle') || '(default)',
-                   hardwareAcceleration: app.isHardwareAccelerationEnabled()
+      ozone: app.commandLine.getSwitchValue('ozone-platform') || '(auto)',
+      angle: app.commandLine.getSwitchValue('use-angle') || '(default)',
+      hardwareAcceleration: app.isHardwareAccelerationEnabled()
     })
   )
   app
-  .getGPUInfo('basic')
-  .then((i) => {
-    console.log('[gpu]', JSON.stringify(i))
-    console.log('[gpu-features]', JSON.stringify(app.getGPUFeatureStatus()))
-  })
-  .catch((err) => console.log('[gpu] info error', String(err)))
+    .getGPUInfo('basic')
+    .then((i) => {
+      console.log('[gpu]', JSON.stringify(i))
+      console.log('[gpu-features]', JSON.stringify(app.getGPUFeatureStatus()))
+    })
+    .catch((err) => console.log('[gpu] info error', String(err)))
   // CastLabs recommends waiting for Electron's component updater before creating a playback window.
   // Continue after a rejected update (for example, offline) so a CDM update failure never hides the UI.
   try {
@@ -292,15 +292,15 @@ app.whenReady().then(async () => {
   installMediaHeaderRules()
   registerIpc()
   const url = isDev
-  ? process.env.ELECTRON_RENDERER_URL!
-  : `http://127.0.0.1:${await serveStatic(path.join(__dirname, '../build'))}/`
+    ? process.env.ELECTRON_RENDERER_URL!
+    : `http://127.0.0.1:${await serveStatic(path.join(__dirname, '../build'))}/`
   boot('served')
   let win = createWindow(url)
   boot('window-created')
   initUpdater(win) // self-update from GitHub Releases (packaged AppImage only)
-app.on('activate', () => {
-  if (BrowserWindow.getAllWindows().length === 0) win = createWindow(url)
-})
+  app.on('activate', () => {
+    if (BrowserWindow.getAllWindows().length === 0) win = createWindow(url)
+  })
 }).catch((err) => {
   console.error('[boot-fatal]', err)
   app.exit(1)
